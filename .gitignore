@@ -1,0 +1,11 @@
+dist
+src/Keys.hs
+cabal-dev
+.cabal-sandbox
+cabal.sandbox.config
+*.o
+*.hi
+*.chi
+*.chs.h
+.virthualenv
+*.aes
