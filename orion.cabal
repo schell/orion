@@ -63,13 +63,21 @@ executable orion
                         blaze-html >=0.7 && <0.8,
                         clientsession >=0.9 && <0.10,
                         bcrypt >=0.0 && <0.1,
+                        HDBC >= 2.4 && <3.0,
+                        HDBC-sqlite3 >=2.3.3 && <3.0,
+                        directory -any,
+                        wai -any,
+                        http-types -any,
                         containers -any,
                         time -any,
                         scotty -any,
                         transformers -any,
+                        mtl -any,
                         bytestring -any,
                         text -any,
-                        aeson -any
+                        aeson -any,
+                        attoparsec -any,
+                        configurator -any
 
   -- Directories containing source files.
   hs-source-dirs:       src

@@ -1,3 +1,4 @@
+orion.cfg
 dist
 src/Keys.hs
 cabal-dev
@@ -9,3 +10,5 @@ cabal.sandbox.config
 *.chs.h
 .virthualenv
 *.aes
+*.swp
+*.swo

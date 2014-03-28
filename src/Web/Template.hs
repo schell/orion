@@ -1,14 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 module Web.Template where
 
-import           Text.Blaze.Html
+import           Network.HTTP.Types.Status
 import           Data.Monoid
+import           Text.Blaze.Html
 import           Text.Blaze.Html5
+import           Web.User
+import           Control.Monad
+import qualified Data.ByteString.Char8 as B
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
 
 
-headWithTitle :: H.Markup -> Html
+headWithTitle :: Html -> Html
 headWithTitle t = H.head $ do
     meta ! A.charset "utf-8"
     meta ! A.name "viewport" ! A.content "width=device-width, initial-scale=1.0"
@@ -21,35 +26,104 @@ headWithTitle t = H.head $ do
     --  Add custom CSS here
     H.style "body {margin-top: 60px;}"
 
-wrapper :: H.Markup -> H.Markup -> Html
-wrapper t content =
+
+
+wrapper :: Html -> Html -> Html
+wrapper = wrapperWithNav loggedOutNav
+
+
+authdWrapper :: Html -> Html -> Html
+authdWrapper = loggedIn
+
+
+loggedIn :: Html -> Html -> Html
+loggedIn = wrapperWithNav loggedInNav
+
+
+wrapperWithNav :: Html -> Html -> Html -> Html
+wrapperWithNav navbar t content =
     docTypeHtml ! A.lang "en" $ do
         headWithTitle t
         body $ do
-            nav ! A.class_ "navbar navbar-inverse navbar-fixed-top" $
-                H.div ! A.class_ "container" $ do
-                    H.div ! A.class_ "navbar-header" $ do
-                        button ! A.type_ "button" ! A.class_ "navbar-toggle" ! dataAttribute "toggle" "collapse" ! dataAttribute "target" ".navbar-ex1-collapse" $ do
-                            H.span ! A.class_ "sr-only" $ "Toggle navigation"
-                            H.span ! A.class_ "icon-bar" $ mempty
-                            H.span ! A.class_ "icon-bar" $ mempty
-                            H.span ! A.class_ "icon-bar" $ mempty
-                        a ! A.class_ "navbar-brand" ! A.href "/" $ "Orion ***"
-                    --  Collect the nav links, forms, and other content for toggling
-                    H.div ! A.class_ "collapse navbar-collapse navbar-ex1-collapse" $ ul ! A.class_ "nav navbar-nav" $ do
-                        li $ a ! A.href "/login" $ "Login"
-                    --  /.navbar-collapse
-                --  /.container
+            navbar
             H.div ! A.class_ "container" $ H.div ! A.class_ "row" $ H.div ! A.class_ "col-lg-12" $ content
-            --  /.container
-            --  JavaScript
             script ! A.src "http://code.jquery.com/jquery-1.10.2.min.js" $ mempty
             script ! A.src "http://netdna.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js" $ mempty
 
-loginOptions :: Html
-loginOptions = H.div $ do
+
+navFromPairs :: [(AttributeValue, Html)] -> Html
+navFromPairs links =
+    nav ! A.class_ "navbar navbar-inverse navbar-fixed-top" $
+        H.div ! A.class_ "container" $ do
+            H.div ! A.class_ "navbar-header" $ do
+                button ! A.type_ "button" ! A.class_ "navbar-toggle"
+                       ! dataAttribute "toggle" "collapse"
+                       ! dataAttribute "target" ".navbar-ex1-collapse" $ do
+                    H.span ! A.class_ "sr-only" $ "Toggle navigation"
+                    forM_ links $ \(href', html') ->
+                        H.span ! A.class_ "icon-bar" $ a ! A.href href' $ html'
+                a ! A.class_ "navbar-brand" ! A.href "/" $ "Orion***"
+            --  Collect the nav links, forms, and other content for toggling
+            H.div ! A.class_ "collapse navbar-collapse navbar-ex1-collapse" $
+                ul ! A.class_ "nav navbar-nav" $
+                    forM_ links $ \(href', html') -> li $ a ! A.href href' $ html'
+
+
+loggedOutNav :: Html
+loggedOutNav = navFromPairs [("/login", "Login")]
+
+
+loggedInNav :: Html
+loggedInNav = navFromPairs [ ("/logout", "Logout")
+                           , ("/user", "User")
+                           ]
+
+loginOptions :: Maybe String -> Html
+loginOptions mParam = flip (maybe "/") mParam $ \redir -> H.div $ do
     p $ "Sign in using one of these services:"
     ul $ do
-        li $ a ! A.href "/login/github" $ "Github"
-        li $ a ! A.href "/login/github" $ "Github"
-        li $ a ! A.href "/login/github" $ "Github"
+        li $ a ! A.href (toValue $ "/login/github?redirect=" ++ redir) $ "Github"
+        li $ a ! A.href (toValue $ "/login/facebook?redirect=" ++ redir) $ "Facebook"
+        li $ a ! A.href (toValue $ "/login/github?redirect=" ++ redir) $ "Github"
+
+
+errorMessage :: String -> Html
+errorMessage "stateMismatch" = do
+    h3 "State mismatch"
+    p "It looks like there was an error communicating with the login service. \
+       \You should make sure you are on a secure network as a man in the middle \
+       \attack may be occurring."
+
+errorMessage err = do
+    h3 "Unknown error"
+    p "An unknown error occured."
+    pre $ toHtml err
+
+
+errorStatus :: Status -> Html
+errorStatus stat = do
+    h3 $ toHtml $ show $ statusCode stat
+    p $ toHtml $ B.unpack $ statusMessage stat
+
+
+userTable :: User -> Html
+userTable u = do
+    let UserData{..} = _uData u
+        service      = case u of
+                           (GithubUser _ _) -> "github"
+                           (FacebookUser _ _) -> "facebook"
+    h3 "User Data"
+    table ! A.class_ "table" $ do
+        thead $ do
+            th $ "Auth'd By"
+            th $ "Id"
+            th $ "Login"
+            th $ "Name"
+            th $ "Email"
+        tbody $ tr $ do
+            td $ service
+            td $ toHtml _udId
+            td $ toHtml _udLogin
+            td $ toHtml _udName
+            td $ toHtml _udEmail
+

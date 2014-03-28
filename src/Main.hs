@@ -3,165 +3,130 @@
 module Main where
 
 import           Keys
-import           Web.Scotty as S
-import           Web.ClientSession
 import           Crypto.BCrypt
+import           Web.Orion
+import           Web.Scotty.Trans
 import           Web.Template
 import           Web.Template.Renderer
+import           Web.Session
+import           Web.User
 import           Network.OAuth.OAuth2
-import           Control.Concurrent.MVar
-import           Control.Applicative
-import           Control.Monad
-import           Control.Monad.IO.Class (liftIO)
+import           Control.Monad.Reader
 import           Text.Blaze.Html
-import           Data.Time.Clock
-import           Data.Time.Calendar
+import           Text.Blaze.Html5 hiding (param, object, map, b)
 import           Data.Aeson
-import           Data.Maybe
-import           Data.Text                       (Text)
-import qualified Data.Map                        as M
+import           Data.List (transpose)
 import qualified Data.Text.Lazy                  as LT
+import qualified Data.Text                       as T
 import qualified Data.ByteString.Char8           as B
-import qualified Data.ByteString.Lazy            as LB
+import qualified Data.ByteString.Lazy.Char8      as LB
+import qualified Data.Map                        as Map
 
---data Users
+
+optionalParam :: Parsable a => LT.Text -> ActionOM (Maybe a)
+optionalParam x = (fmap Just $ param x) `rescue` (const $ return Nothing)
+
+
+defaultParam :: Parsable a => LT.Text -> a -> ActionOM a
+defaultParam x def = do
+    mP <- optionalParam x
+    return $ case mP of
+        Nothing -> def
+        Just pm -> pm
+
 
 main :: IO ()
-main = do
-    scotty 9988 $ do
-        get "/" $ do
-           mUser <- readUserCookie :: ActionM (Maybe (User GithubUser))
-           blaze $ wrapper "Home" $ toHtml $ show mUser
-        get "/login" $ blaze $ wrapper "Login" $ loginOptions
-        get "/login/:service" $ do
-            Just salt <- liftIO $ genSaltUsingPolicy fastBcryptHashingPolicy
-            let query   = [("state", salt)]
-                authUrl = authorizationUrl githubKey `appendQueryParam` query
-            -- | TODO: Add in more services.
-            --service <- S.param "service"
-            redirect $ bsToLT authUrl
-        get "/githubCallback" $ do
-            code <- S.param "code"
-            state <- S.param "state"
-            -- | TODO: Check the state to see if it matches.
-            let (url, body') = accessTokenUrl githubKey code
-                query        = [("state", state)]
-            token <- liftIO $ doJSONPostRequest url $ body' ++ query :: ActionM (OAuth2Result AccessToken)
-            case token of
-                Right at -> do eUser <- liftIO $ githubUserInfo at
-                               case eUser of
-                                   Right u -> do t <- liftIO $ getCurrentTime
-                                                 let u' = User at t u
-                                                 writeUserCookie u'
-                                                 blaze $ wrapper "Login" $ toHtml $ show u'
-                                   Left l  -> blaze $ wrapper "Login" $ toHtml $ show l
-                -- | TODO: Better error handling.
-                Left l   -> blaze $ wrapper "Login" $ toHtml $ show l
+main = orion $ do
+    get "/" $ (blaze $ authdWrapper "Home" "Home")
+              `ifAuthorizedOr`
+              (blaze $ wrapper "Home" "Home")
+
+    get "/authCheck" $ do
+        mU <- readUserCookie
+        blaze $ wrapper "Auth Check" $ do
+            h3 "Auth Check"
+            pre $ toHtml $ show mU
+
+    get "/user" $ withAuthUser $ \u -> blaze $ authdWrapper "User" $ userTable u
+
+    get "/error/:err" $ do
+        err <- fmap errorMessage $ param "err"
+        blaze $ wrapper "Error" err
+
+    get "/login" $ do
+        dest <- defaultParam "redirect" "/"
+        blaze $ wrapper "Login" $ loginOptions $ Just dest
+
+    get "/logout" $ do
+        expireUserCookie
+        blaze $ wrapper "Logout" $ p "You have been logged out."
+
+    get "/login/:service" $ do
+        dest <- fmap ("/" ++) $ defaultParam "redirect" ""
+        Just salt <- liftIO $ genSaltUsingPolicy fastBcryptHashingPolicy
+        modifyAuthStates $ Map.insert salt $ LT.pack dest
+        let query   = [("state", salt)]
+        -- | TODO: Add in more services.
+        service <- param "service"
+        let authUrl  = authorizationUrl (serviceKey service) `appendQueryParam` query
+            authUrl' = authUrl `appendQueryParam` serviceQuery service
+        redirect $ bsToLT authUrl'
+
+    get "/login/:service/complete" $ do
+        service <- param "service"
+        signInWith service
 
 
 bsToLT :: B.ByteString -> LT.Text
 bsToLT = LT.pack . B.unpack
 
-githubUserInfo :: AccessToken -> IO (OAuth2Result GithubUser)
-githubUserInfo token = authGetJSON token "https://api.github.com/user"
+
+serviceKey :: AuthService -> OAuth2
+serviceKey Github   = githubKey
+serviceKey Facebook = facebookKey
 
 
-instance ToJSON AccessToken where
-    toJSON (AccessToken at Nothing) = object [ "access_token" .= B.unpack at ]
-    toJSON (AccessToken at (Just rt)) = object [ "access_token" .= B.unpack at
-                                               , "refresh_token" .= B.unpack rt
-                                               ]
+serviceQuery :: AuthService -> QueryParams
+serviceQuery Github = []
+serviceQuery Facebook = [("scope", "user_about_me,email")]
 
 
-data User a = User { _uToken   :: AccessToken
-                   , _uExpires :: UTCTime
-                   , _uData    :: a
-                   } deriving (Show)
-
-instance FromJSON a => FromJSON (User a) where
-    parseJSON (Object o) = User
-                       <$> o .: "token"
-                       <*> o .: "expires"
-                       <*> o .: "data"
-    parseJSON _ = mzero
-
-instance ToJSON a => ToJSON (User a) where
-    toJSON (User token expires data') =
-        object [ "token" .= token
-               , "expires" .= expires
-               , "data" .= data'
-               ]
+signInWith :: AuthService -> ActionOM ()
+signInWith service = do
+    let key = serviceKey service
+    code'  <- param "code"
+    state  <- param "state"
+    states <- readAuthStates
+    modifyAuthStates $ Map.delete state
+    case Map.lookup state states of
+        Nothing   -> redirect "error/stateMismatch"
+        Just dest -> do
+            let (url, body') = accessTokenUrl key code'
+                query        = [("state", state)]
+            ebs <- liftIO $ doSimplePostRequest url $ body' ++ query
+            case ebs of
+                Right bs -> loginUser service bs dest
+                Left _   -> redirect "/error/decodingToken"
 
 
-data GithubUser = GithubUser { _gId      :: Integer
-                             , _gLogin   :: Text
-                             , _gName    :: Text
-                             , _gEmail   :: Text
-                             } deriving (Show, Eq)
-
-zeroDay :: UTCTime
-zeroDay = UTCTime (ModifiedJulianDay 0) 0
-
-instance FromJSON GithubUser where
-    parseJSON (Object o) = GithubUser
-                           <$> o .: "id"
-                           <*> o .: "login"
-                           <*> o .: "name"
-                           <*> o .: "email"
-    parseJSON _ = mzero
-
-instance ToJSON GithubUser where
-    toJSON (GithubUser id' login name email) =
-        object [ "id" .= id'
-               , "login" .= login
-               , "name" .= name
-               , "email" .= email
-               ]
-
-cookieName :: LT.Text
-cookieName = "orioncookie"
-
-updateExpires :: User a -> IO (User a)
-updateExpires u = do
-    t <- getCurrentTime
-    let mins = 10 {-minutes-} * 60 {-seconds-}
-        t' = addUTCTime mins t
-    return u{_uExpires=t'}
-
-writeUserCookie :: ToJSON a => User a -> ActionM ()
-writeUserCookie u = do
-    u'  <- liftIO $ updateExpires u
-    k   <- liftIO getDefaultKey
-    u'' <- liftIO $ encryptIO k $ LB.toStrict $ encode u'
-    setHeader "Set-Cookie" $ LT.concat [ cookieName
-                                       , "="
-                                       , LT.pack $ B.unpack u''
-                                       , "; "
-                                       ]
-
-type CookieMap = M.Map LT.Text LT.Text
+loginUser :: AuthService -> LB.ByteString -> LT.Text -> ActionOM ()
+loginUser service bs dest = do
+    let jsn = if service == Facebook then parseQuery bs
+              else case decode bs of
+                       Just b  -> b
+                       Nothing -> object []
+    eUser <- case fromJSON jsn of
+                 Error _ -> redirect "/error/decodingToken"
+                 Success t -> liftIO $ getUserInfo service t
+    case eUser of
+        Right u  -> do writeUserCookie u
+                       redirect dest
+        Left _   -> do redirect "/error/decodingUser"
 
 
-parseCookies :: LT.Text -> CookieMap
-parseCookies = foldl mapify M.empty . map tuple . splitCookies
-    where splitCookies   = LT.split (==';')
-          tuple t        = (LT.takeWhile (/= '=') $ LT.dropWhile (== ' ') t, LT.drop 1 $ LT.dropWhile (/= '=') t)
-          mapify m (k,v) = M.insert k v m
-
-
-readUserCookie :: FromJSON a => ActionM (Maybe (User a))
-readUserCookie = do
-    -- Retrieve and parse our cookies.
-    mCookies <- reqHeader "Cookie"
-    if isNothing mCookies then return Nothing else
-      -- Make sure we have our specific cookie.
-      let cookies = parseCookies $ fromJust mCookies
-          mCookie = M.lookup cookieName cookies
-      in if isNothing mCookie then return Nothing else
-           -- Decrypt our cookie data.
-           do k <- liftIO getDefaultKey
-              let cookie = fromJust mCookie
-                  mData  = decrypt k (B.pack $ LT.unpack cookie)
-              if isNothing mData then return Nothing else
-                let datum = LB.fromStrict $ fromJust mData
-                in return $ decode datum
+parseQuery :: LB.ByteString -> Value
+parseQuery bs = do
+    let ps = transpose $ map (T.split (=='=')) $ T.split (=='&') $ T.pack $ LB.unpack bs
+    case ps of
+        names:values:_ -> object $ zip names $ map toJSON values
+        _ -> object []
