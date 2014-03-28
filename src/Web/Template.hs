@@ -51,8 +51,8 @@ wrapperWithNav navbar t content =
             script ! A.src "http://netdna.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js" $ mempty
 
 
-navFromPairs :: [(AttributeValue, Html)] -> Html
-navFromPairs links =
+navFromPairs :: [(AttributeValue, Html)] -> [(AttributeValue, Html)] -> Html
+navFromPairs leftLinks rightLinks =
     nav ! A.class_ "navbar navbar-inverse navbar-fixed-top" $
         H.div ! A.class_ "container" $ do
             H.div ! A.class_ "navbar-header" $ do
@@ -60,23 +60,25 @@ navFromPairs links =
                        ! dataAttribute "toggle" "collapse"
                        ! dataAttribute "target" ".navbar-ex1-collapse" $ do
                     H.span ! A.class_ "sr-only" $ "Toggle navigation"
-                    forM_ links $ \(href', html') ->
+                    forM_ leftLinks $ \(href', html') ->
+                        H.span ! A.class_ "icon-bar" $ a ! A.href href' $ html'
+                    forM_ rightLinks $ \(href', html') ->
                         H.span ! A.class_ "icon-bar" $ a ! A.href href' $ html'
                 a ! A.class_ "navbar-brand" ! A.href "/" $ "Orion***"
             --  Collect the nav links, forms, and other content for toggling
-            H.div ! A.class_ "collapse navbar-collapse navbar-ex1-collapse" $
-                ul ! A.class_ "nav navbar-nav" $
-                    forM_ links $ \(href', html') -> li $ a ! A.href href' $ html'
+            H.div ! A.class_ "collapse navbar-collapse navbar-ex1-collapse" $ do
+                ul ! A.class_ "nav navbar-nav navbar-left" $
+                    forM_ leftLinks $ \(href', html') -> li $ a ! A.href href' $ html'
+                ul ! A.class_ "nav navbar-nav navbar-right" $
+                    forM_ rightLinks $ \(href', html') -> li $ a ! A.href href' $ html'
 
 
 loggedOutNav :: Html
-loggedOutNav = navFromPairs [("/login", "Login")]
+loggedOutNav = navFromPairs [] [("/login", "Login")]
 
 
 loggedInNav :: Html
-loggedInNav = navFromPairs [ ("/logout", "Logout")
-                           , ("/user", "User")
-                           ]
+loggedInNav = navFromPairs [("/user", "User")]  [("/logout", "Logout")]
 
 loginOptions :: Maybe String -> Html
 loginOptions mParam = flip (maybe "/") mParam $ \redir -> H.div $ do
@@ -84,7 +86,6 @@ loginOptions mParam = flip (maybe "/") mParam $ \redir -> H.div $ do
     ul $ do
         li $ a ! A.href (toValue $ "/login/github?redirect=" ++ redir) $ "Github"
         li $ a ! A.href (toValue $ "/login/facebook?redirect=" ++ redir) $ "Facebook"
-        li $ a ! A.href (toValue $ "/login/github?redirect=" ++ redir) $ "Github"
 
 
 errorMessage :: String -> Html

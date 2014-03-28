@@ -54,8 +54,11 @@ main = orion $ do
         blaze $ wrapper "Error" err
 
     get "/login" $ do
-        dest <- defaultParam "redirect" "/"
-        blaze $ wrapper "Login" $ loginOptions $ Just dest
+        dest <- defaultParam "redirect" ""
+        (blaze $ authdWrapper "Login" $ loginOptions $ Just dest)
+          `ifAuthorizedOr`
+          (blaze $ wrapper "Login" $ loginOptions $ Just dest)
+
 
     get "/logout" $ do
         expireUserCookie
@@ -120,6 +123,7 @@ loginUser service bs dest = do
                  Success t -> liftIO $ getUserInfo service t
     case eUser of
         Right u  -> do writeUserCookie u
+                       liftIO $ putStrLn $ "Redirecting to " ++ LT.unpack dest
                        redirect dest
         Left _   -> do redirect "/error/decodingUser"
 
