@@ -3,13 +3,15 @@
 module Web.Session where
 
 import           Web.Orion
+import           Web.Database.Types
+import           Web.Database.Operations
 import           Web.Scotty.Trans
-import           Web.Orion.Types
-import           Web.User
 import           Web.ClientSession
 import           Web.Template
 import           Web.Template.Renderer
 import           Control.Monad.IO.Class (liftIO)
+import           Control.Monad
+import           Control.Applicative
 import           Network.HTTP.Types.Status
 import           Network.Wai
 import           Data.Time.Clock
@@ -22,9 +24,27 @@ import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy            as LB
 
 
-withAuthUser :: (User -> ActionOM ()) -> ActionOM ()
+type CookieMap = M.Map TL.Text TL.Text
+
+
+data UserCookie = UserCookie Integer UTCTime deriving (Show)
+
+
+instance FromJSON UserCookie where
+    parseJSON (Object o) = UserCookie <$> o .: "id"
+                                      <*> o .: "expires"
+    parseJSON _ = mzero
+
+
+instance ToJSON UserCookie where
+    toJSON (UserCookie uid expires) = object [ "id" .= uid
+                                             , "expires" .= expires
+                                             ]
+
+
+withAuthUser :: (OrionUser -> ActionOM ()) -> ActionOM ()
 withAuthUser f = authorize $ do
-    mUser <- readUserCookie
+    mUser <- readUser
     case mUser of
         Just u  -> f u
         Nothing -> blazeUnauthorized
@@ -46,39 +66,41 @@ ifAuthorizedOr f g = do
     mCookie <- readUserCookie
     if isNothing mCookie then g else do
         -- Check the expiry.
-        let c = fromJust mCookie
-        invalidCookie <- cookieHasExpired c
-        if invalidCookie then g else do
-            -- Update the cookie.
-            writeUserCookie c
-            f
+        let c@(UserCookie uid _) = fromJust mCookie
+        isExpired <- cookieHasExpired c
+        validUser <- userExists uid
+        if isExpired || not validUser 
+        -- Expire it for great good.
+        then expireUserCookie >> g 
+        -- Update the cookie.
+        else writeUserCookie c >> f
 
 
 renewUserCookie :: ActionOM ()
 renewUserCookie = do
     mUser <- readUserCookie
-    flip (maybe (liftIO $ putStrLn "Can't renew cookie.")) mUser $ \u -> do
+    flip (maybe (liftIO $ putStrLn "Can't renew cookie.")) mUser $ \(UserCookie uid _) -> do
         t <- liftIO $ getCurrentTime
         seconds <- fmap fromIntegral readCfgCookieLife
         let t' = addUTCTime seconds t
-        writeUserCookie $ updateExpires t' u
+        writeUserCookie $ UserCookie uid t'
 
 
 expireUserCookie :: ActionOM ()
 expireUserCookie = do
     mUser <- readUserCookie
-    flip (maybe (return ())) mUser $ \u -> do
+    flip (maybe (return ())) mUser $ \(UserCookie uid _) -> do
         t <- liftIO $ getCurrentTime
         let t' = addUTCTime (-60 * 10)  t
-        writeUserCookie $ updateExpires t' u
+        writeUserCookie $ UserCookie uid t'
 
 
-writeUserCookie :: User -> ActionOM ()
-writeUserCookie u = do
+writeUserCookie :: UserCookie -> ActionOM ()
+writeUserCookie u@(UserCookie _ e) = do
     k  <- liftIO getDefaultKey
     u' <- liftIO $ encryptIO k $ LB.toStrict $ encode u
     t  <- liftIO $ getCurrentTime
-    let life = diffUTCTime (_ucExpires $ _uCreds u) t
+    let life = diffUTCTime e t
     setHeader "Set-Cookie" $ TL.concat [ cookieName
                                        , "="
                                        , TL.pack $ B.unpack u'
@@ -90,7 +112,7 @@ writeUserCookie u = do
                                        ]
 
 
-readUserCookie :: ActionOM (Maybe User)
+readUserCookie :: ActionOM (Maybe UserCookie)
 readUserCookie = do
     -- Retrieve and parse our cookies.
     mCookies <- reqHeader "Cookie"
@@ -108,28 +130,35 @@ readUserCookie = do
                 in return $ decode datum
 
 
-cookieHasExpired :: User -> ActionOM Bool
+futureCookieForUser :: OrionUser -> ActionOM UserCookie
+futureCookieForUser u = do
+    l <- readCfgCookieLife
+    t <- liftIO $ getCurrentTime
+    let t' = addUTCTime (fromIntegral l) t
+    return $ UserCookie (_ouId u) t'
+
+
+readUser :: ActionOM (Maybe OrionUser)
+readUser = do
+    mCookie <- readUserCookie
+    case mCookie of
+        Nothing -> return Nothing
+        Just (UserCookie uid _) -> lookupUser uid
+
+
+cookieHasExpired :: UserCookie -> ActionOM Bool
 cookieHasExpired c = fmap (<= 0) $ cookieExpiresIn c
 
 
-cookieExpiresIn :: User -> ActionOM NominalDiffTime
-cookieExpiresIn u = do
+cookieExpiresIn :: UserCookie -> ActionOM NominalDiffTime
+cookieExpiresIn (UserCookie _ e) = do
     t <- liftIO getCurrentTime
-    let d = diffUTCTime (_ucExpires $ _uCreds u) t
+    let d = diffUTCTime e t
     return d
-
-
-updateExpires :: UTCTime -> User -> User
-updateExpires t u =
-    let c = _uCreds u
-    in u{_uCreds=c{_ucExpires=t}}
 
 
 cookieName :: TL.Text
 cookieName = "orioncookie"
-
-
-type CookieMap = M.Map TL.Text TL.Text
 
 
 parseCookies :: TL.Text -> CookieMap

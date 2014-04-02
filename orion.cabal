@@ -59,25 +59,27 @@ executable orion
   -- Other library packages from which modules are imported.
   build-depends:        base >=4.7 && <4.8,
                         hoauth2 >=0.3.6.1 && <0.4,
+                        wai >= 2.0 && <2.1,
                         http-conduit >=2.0 && <3.0,
                         blaze-html >=0.7 && <0.8,
                         clientsession >=0.9 && <0.10,
                         bcrypt >=0.0 && <0.1,
                         HDBC >= 2.4 && <3.0,
                         HDBC-sqlite3 >=2.3.3 && <3.0,
+                        resource-pool >= 0.2 && <0.3,
+                        scotty -any,
                         directory -any,
-                        wai -any,
                         http-types -any,
                         containers -any,
                         time -any,
-                        scotty -any,
                         transformers -any,
                         mtl -any,
                         bytestring -any,
                         text -any,
                         aeson -any,
                         attoparsec -any,
-                        configurator -any
+                        configurator -any,
+                        ekg -any
 
   -- Directories containing source files.
   hs-source-dirs:       src

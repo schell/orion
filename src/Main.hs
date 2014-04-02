@@ -1,136 +1,121 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Main where
 
-import           Keys
-import           Crypto.BCrypt
+import           System.Remote.Monitoring
+import           Web.Auth.OAuth2
+import           Web.Auth.Types
+import           Web.Auth.Service
 import           Web.Orion
+import           Web.Orion.User
+import           Web.Database.Types
+import           Web.Database.Operations
 import           Web.Scotty.Trans
 import           Web.Template
 import           Web.Template.Renderer
 import           Web.Session
-import           Web.User
+import           Database
 import           Network.OAuth.OAuth2
-import           Control.Monad.Reader
+import           Control.Monad.IO.Class (liftIO)
 import           Text.Blaze.Html
 import           Text.Blaze.Html5 hiding (param, object, map, b)
-import           Data.Aeson
-import           Data.List (transpose)
 import qualified Data.Text.Lazy                  as LT
-import qualified Data.Text                       as T
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as LB
 import qualified Data.Map                        as Map
 
 
-optionalParam :: Parsable a => LT.Text -> ActionOM (Maybe a)
-optionalParam x = (fmap Just $ param x) `rescue` (const $ return Nothing)
-
-
-defaultParam :: Parsable a => LT.Text -> a -> ActionOM a
-defaultParam x def = do
-    mP <- optionalParam x
-    return $ case mP of
-        Nothing -> def
-        Just pm -> pm
-
-
 main :: IO ()
-main = orion $ do
-    get "/" $ (blaze $ authdWrapper "Home" "Home")
+main = do
+    _ <- forkServer "localhost" 9989
+
+    orion $ do
+        createUserDatabaseIfNeeded
+
+        get "/" $ (blaze $ authdWrapper "Home" "Home")
+                  `ifAuthorizedOr`
+                  (blaze $ wrapper "Home" "Home")
+
+        get "/authCheck" $ do
+            mU <- readUserCookie
+            blaze $ wrapper "Auth Check" $ do
+                h3 "Auth Check"
+                pre $ toHtml $ show mU
+
+        get "/user" $ withAuthUser $ \u -> blaze $ authdWrapper "User" $ userTable u
+
+        get "/error/:err" $ do
+            err <- fmap errorMessage $ param "err"
+            blaze $ wrapper "Error" err
+
+        get "/login" $ do
+            dest <- defaultParam "redirect" ""
+            (blaze $ authdWrapper "Login" $ loginOptions $ Just dest)
               `ifAuthorizedOr`
-              (blaze $ wrapper "Home" "Home")
+              (blaze $ wrapper "Login" $ loginOptions $ Just dest)
 
-    get "/authCheck" $ do
-        mU <- readUserCookie
-        blaze $ wrapper "Auth Check" $ do
-            h3 "Auth Check"
-            pre $ toHtml $ show mU
+        get "/logout" $ do
+            expireUserCookie
+            blaze $ wrapper "Logout" $ p "You have been logged out."
 
-    get "/user" $ withAuthUser $ \u -> blaze $ authdWrapper "User" $ userTable u
+        get "/login/:service" $ do
+            service <- param "service"
+            url <- prepareServiceLogin service (serviceKey service)
+            redirect url
 
-    get "/error/:err" $ do
-        err <- fmap errorMessage $ param "err"
-        blaze $ wrapper "Error" err
+        get "/login/:service/complete" $ do
+            dest <- popRedirectDestination
+            eUser <- oauthenticate
+            case eUser of
+                Left err -> blaze $ wrapper "OAuth Error" $ do
+                    h3 "Authentication Error"
+                    p $ toHtml $ LB.unpack err
+                Right u  -> do c <- futureCookieForUser u
+                               writeUserCookie c
+                               redirect dest
 
-    get "/login" $ do
-        dest <- defaultParam "redirect" ""
-        (blaze $ authdWrapper "Login" $ loginOptions $ Just dest)
-          `ifAuthorizedOr`
-          (blaze $ wrapper "Login" $ loginOptions $ Just dest)
+        --get "/link/:service" $ withAuthUser $ \u -> do
+        --    service <- param "service"
+        --    if service `elem` linkedServices u
+        --    then blaze $ wrapper "Link Service" $ do
+        --        h3 "Blarg"
+        --        p "You've already linked that service."
+        --    else do let key = serviceKey service
+        --            baseUrl <- readCfg getCfgBaseUrl
+        --            let call = concat [ baseUrl
+        --                              , "/link/"
+        --                              , serviceToString service
+        --                              , "/complete"
+        --                              ]
+        --                call' = B.pack call
+        --                key' = key{oauthCallback= Just call'}
+        --            url <- prepareServiceLogin service key'
+        --            redirect url
+
+        --get "/link/:service/complete" $ withAuthUser $ \OrionUser{..} -> do
+        --    dest    <- popRedirectDestination
+        --    service <- param "service"
+        --    eUdat   <- fetchRemoteUserData
+        --    case eUdat of
+        --        Left err   -> blaze $ authdWrapper "Link Error" $ do
+        --                        h3 $ toHtml $ "Error linking " ++ serviceToString service
+        --                        p $ toHtml $ LB.unpack err
+        --        Right udat -> do mUser <- addAccountToUser service _ouId udat
+        --                         case mUser of
+        --                             Nothing -> blaze $ authdWrapper "Link Error" $ do
+        --                                            h3 $ toHtml $ "Error linking " ++ serviceToString service
+        --                                            p $ "Failed to add account."
+        --                             Just _  -> redirect dest
 
 
-    get "/logout" $ do
-        expireUserCookie
-        blaze $ wrapper "Logout" $ p "You have been logged out."
 
-    get "/login/:service" $ do
-        dest <- fmap ("/" ++) $ defaultParam "redirect" ""
-        Just salt <- liftIO $ genSaltUsingPolicy fastBcryptHashingPolicy
-        modifyAuthStates $ Map.insert salt $ LT.pack dest
-        let query   = [("state", salt)]
-        -- | TODO: Add in more services.
-        service <- param "service"
-        let authUrl  = authorizationUrl (serviceKey service) `appendQueryParam` query
-            authUrl' = authUrl `appendQueryParam` serviceQuery service
-        redirect $ bsToLT authUrl'
-
-    get "/login/:service/complete" $ do
-        service <- param "service"
-        signInWith service
-
-
-bsToLT :: B.ByteString -> LT.Text
-bsToLT = LT.pack . B.unpack
-
-
-serviceKey :: AuthService -> OAuth2
-serviceKey Github   = githubKey
-serviceKey Facebook = facebookKey
-
-
-serviceQuery :: AuthService -> QueryParams
-serviceQuery Github = []
-serviceQuery Facebook = [("scope", "user_about_me,email")]
-
-
-signInWith :: AuthService -> ActionOM ()
-signInWith service = do
-    let key = serviceKey service
-    code'  <- param "code"
+popRedirectDestination :: ActionOM LT.Text
+popRedirectDestination = do
     state  <- param "state"
     states <- readAuthStates
     modifyAuthStates $ Map.delete state
     case Map.lookup state states of
         Nothing   -> redirect "error/stateMismatch"
-        Just dest -> do
-            let (url, body') = accessTokenUrl key code'
-                query        = [("state", state)]
-            ebs <- liftIO $ doSimplePostRequest url $ body' ++ query
-            case ebs of
-                Right bs -> loginUser service bs dest
-                Left _   -> redirect "/error/decodingToken"
+        Just dest -> return dest
 
-
-loginUser :: AuthService -> LB.ByteString -> LT.Text -> ActionOM ()
-loginUser service bs dest = do
-    let jsn = if service == Facebook then parseQuery bs
-              else case decode bs of
-                       Just b  -> b
-                       Nothing -> object []
-    eUser <- case fromJSON jsn of
-                 Error _ -> redirect "/error/decodingToken"
-                 Success t -> liftIO $ getUserInfo service t
-    case eUser of
-        Right u  -> do writeUserCookie u
-                       liftIO $ putStrLn $ "Redirecting to " ++ LT.unpack dest
-                       redirect dest
-        Left _   -> do redirect "/error/decodingUser"
-
-
-parseQuery :: LB.ByteString -> Value
-parseQuery bs = do
-    let ps = transpose $ map (T.split (=='=')) $ T.split (=='&') $ T.pack $ LB.unpack bs
-    case ps of
-        names:values:_ -> object $ zip names $ map toJSON values
-        _ -> object []

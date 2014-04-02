@@ -18,6 +18,8 @@ defaultCfgFileContents :: String
 defaultCfgFileContents = intercalate "\n"
     [ "port = 9988"
     , "cookie_life = " ++ show (60 * 10 :: Int) -- in seconds.
+    , "users-db-filepath = users.db"
+    , "new-user-acl-level = 100"
     ]
 
 
@@ -47,3 +49,13 @@ getCfgCookieLife :: Config -> IO Integer
 getCfgCookieLife cfg = lookupDefault (10 * 60) cfg "cookie_life"
 
 
+getCfgUserDBFilePath :: Config -> IO FilePath
+getCfgUserDBFilePath cfg = lookupDefault "users.db" cfg "users-db-filepath"
+
+
+getCfgNewUserAclLevel :: Config -> IO Integer
+getCfgNewUserAclLevel cfg = lookupDefault 100 cfg "new-user-acl-level"
+
+
+getCfgBaseUrl :: Config -> IO String
+getCfgBaseUrl cfg = lookupDefault "http://127.0.0.1:9988" cfg "base-url"

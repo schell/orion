@@ -4,9 +4,12 @@ module Web.Template where
 
 import           Network.HTTP.Types.Status
 import           Data.Monoid
+import           Data.List ((\\))
 import           Text.Blaze.Html
 import           Text.Blaze.Html5
-import           Web.User
+import           Web.Database.Types
+import           Web.Auth.Service
+import           Web.Orion.User
 import           Control.Monad
 import qualified Data.ByteString.Char8 as B
 import qualified Text.Blaze.Html5 as H
@@ -107,24 +110,34 @@ errorStatus stat = do
     p $ toHtml $ B.unpack $ statusMessage stat
 
 
-userTable :: User -> Html
-userTable u = do
-    let UserData{..} = _uData u
-        service      = case u of
-                           (GithubUser _ _) -> "github"
-                           (FacebookUser _ _) -> "facebook"
+userTable :: OrionUser -> Html
+userTable o@OrionUser{..} = do
+    let services = allServices \\ linkedServices o
     h3 "User Data"
+    dl $ do
+        dt "User Id"
+        dd $ toHtml $ show _ouId
+        dt "User Level"
+        dd $ toHtml $ show _ouAcl
+    h4 "Linked Accounts"
     table ! A.class_ "table" $ do
         thead $ do
-            th $ "Auth'd By"
-            th $ "Id"
+            th $ "Account Type"
+            th $ "Account Id"
             th $ "Login"
             th $ "Name"
             th $ "Email"
-        tbody $ tr $ do
-            td $ service
-            td $ toHtml _udId
-            td $ toHtml _udLogin
-            td $ toHtml _udName
-            td $ toHtml _udEmail
+        tbody $ forM_ _ouAccounts $ \OrionAccount{..} -> tr $ do
+            td $ toHtml $ show _accService
+            td $ toHtml _accId
+            td $ toHtml _accLogin
+            td $ toHtml _accName
+            td $ toHtml _accEmail
+    h4 "Link Another Account"
+    let serviceLink s = a ! A.href (toValue $ serviceHref s) $ toHtml $ show s
+        serviceHref s = concat ["/login/", s2s s, "?redirect=user"]
+        s2s = serviceToString
+    ul $ forM_ services $ li . serviceLink
+
+
 
