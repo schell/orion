@@ -34,7 +34,9 @@ getCfg = do
     -- Create it if it doesn't exist.
     unless fileExists $ do
         cwd <- getCurrentDirectory
-        h <- openFile (cwd ++ "/" ++ defaultCfgFileName) WriteMode
+        let d = cwd ++ "/" ++ defaultCfgFileName
+        putStrLn $ unwords ["Creating default config file at",d]
+        h <- openFile d WriteMode
         hPutStr h defaultCfgFileContents
         hClose h
     -- Get our config file.

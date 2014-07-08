@@ -1,0 +1,3 @@
+[submodule "submodules/hoauth"]
+	path = submodules/hoauth
+	url = https://github.com/rnons/hoauth.git

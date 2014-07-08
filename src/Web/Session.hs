@@ -69,9 +69,9 @@ ifAuthorizedOr f g = do
         let c@(UserCookie uid _) = fromJust mCookie
         isExpired <- cookieHasExpired c
         validUser <- userExists uid
-        if isExpired || not validUser 
+        if isExpired || not validUser
         -- Expire it for great good.
-        then expireUserCookie >> g 
+        then expireUserCookie >> g
         -- Update the cookie.
         else writeUserCookie c >> f
 
@@ -115,19 +115,27 @@ writeUserCookie u@(UserCookie _ e) = do
 readUserCookie :: ActionOM (Maybe UserCookie)
 readUserCookie = do
     -- Retrieve and parse our cookies.
-    mCookies <- reqHeader "Cookie"
-    if isNothing mCookies then return Nothing else
-      -- Make sure we have our specific cookie.
-      let cookies = parseCookies $ fromJust mCookies
-          mCookie = M.lookup cookieName cookies
-      in if isNothing mCookie then return Nothing else
-           -- Decrypt our cookie data.
-           do k <- liftIO getDefaultKey
-              let cookie = fromJust mCookie
-                  mData  = decrypt k (B.pack $ TL.unpack cookie)
-              if isNothing mData then return Nothing else
-                let datum = LB.fromStrict $ fromJust mData
-                in return $ decode datum
+    mCookies <- header "Cookie"
+    -- Get our server's decryption key.
+    k <- liftIO getDefaultKey
+    -- Decode our UserCookie
+    return $ do cookies <- fmap parseCookies mCookies
+                cookie  <- M.lookup cookieName cookies
+                cookieD <- decrypt k (B.pack $ TL.unpack cookie)
+                decode $ LB.fromStrict cookieD
+
+    --if isNothing mCookies then return Nothing else
+    --  -- Make sure we have our specific cookie.
+    --  let cookies = parseCookies $ fromJust mCookies
+    --      mCookie = M.lookup cookieName cookies
+    --  in if isNothing mCookie then return Nothing else
+    --       -- Decrypt our cookie data.
+    --       do k <- liftIO getDefaultKey
+    --          let cookie = fromJust mCookie
+    --              mData  = decrypt k (B.pack $ TL.unpack cookie)
+    --          if isNothing mData then return Nothing else
+    --            let datum = LB.fromStrict $ fromJust mData
+    --            in return $ decode datum
 
 
 futureCookieForUser :: OrionUser -> ActionOM UserCookie

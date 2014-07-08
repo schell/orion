@@ -11,6 +11,7 @@ import           Web.Database.Operations
 import           Web.Scotty.Trans
 import           Web.Auth.Types
 import           Network.OAuth.OAuth2
+import           Network.HTTP.Conduit
 import           Crypto.BCrypt
 import           Control.Monad.Reader
 import           Data.Aeson
@@ -50,7 +51,8 @@ fetchRemoteUserData = do
     let key = serviceKey service
         (url, body') = accessTokenUrl key code'
         query        = [("state", state)]
-    ebs <- liftIO $ doSimplePostRequest url $ body' ++ query
+    mgr <- lift $ asks _oManager
+    ebs <- liftIO $ doSimplePostRequest mgr key url (body' ++ query)
     case ebs of
         Left err -> return $ Left err
         Right bs -> parseToken service bs
@@ -86,12 +88,13 @@ parseToken service bs = do
                        Nothing -> object []
     case fromJSON jsn of
         Error err -> return $ Left $ LB.pack err
-        Success t -> liftIO $ getUserData service t
+        Success t -> do mgr <- lift $ asks _oManager 
+                        liftIO $ getUserData mgr service t
 
 
-getUserData :: AuthService -> AccessToken -> IO (OAuth2Result UserData)
-getUserData service token = do
-    ebs <- authGetBS token $ serviceUrl service
+getUserData :: Manager -> AuthService -> AccessToken -> IO (OAuth2Result UserData)
+getUserData mgr service token = do
+    ebs <- authGetBS mgr token $ serviceUrl service
     case ebs of
         Left l -> return $ Left l
         Right bs -> parseUserInfo bs

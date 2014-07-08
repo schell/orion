@@ -17,6 +17,7 @@ module Web.Orion (
 import           Web.Orion.Types as O
 import           Web.Orion.Config as O
 import           Web.Scotty.Trans
+import           Network.HTTP.Conduit hiding (port)
 import           Data.Configurator.Types
 import           Data.Map
 import           Data.Pool
@@ -49,10 +50,11 @@ orion f = do
     cfg  <- getCfg
     port <- getCfgPort cfg
     dbFp <- getCfgUserDBFilePath cfg
+    mgr  <- newManager conduitManagerSettings
 
     pool <- createPool (connectSqlite3 dbFp) disconnect 1 60 10
 
-    let r = runOrion $ OrionApp cfg statesVar pool
+    let r = runOrion $ OrionApp cfg statesVar pool mgr
     scottyT port r r $ f
 
 
