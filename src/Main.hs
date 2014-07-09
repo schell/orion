@@ -5,23 +5,16 @@ module Main where
 
 import           System.Remote.Monitoring
 import           Web.Auth.OAuth2
-import           Web.Auth.Types
 import           Web.Auth.Service
 import           Web.Orion
-import           Web.Orion.User
-import           Web.Database.Types
-import           Web.Database.Operations
 import           Web.Scotty.Trans
 import           Web.Template
 import           Web.Template.Renderer
 import           Web.Session
 import           Database
-import           Network.OAuth.OAuth2
-import           Control.Monad.IO.Class (liftIO)
 import           Text.Blaze.Html
 import           Text.Blaze.Html5 hiding (param, object, map, b)
 import qualified Data.Text.Lazy                  as LT
-import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy.Char8      as LB
 import qualified Data.Map                        as Map
 
@@ -61,7 +54,8 @@ main = do
 
         get "/login/:service" $ do
             service <- param "service"
-            url <- prepareServiceLogin service (serviceKey service)
+            let Just key = oauth2serviceKey service
+            url <- prepareServiceLogin service key
             redirect url
 
         get "/login/:service/complete" $ do

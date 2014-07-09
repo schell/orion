@@ -12,13 +12,12 @@ import qualified Text.Blaze.Html.Renderer.Pretty as Pretty
 import qualified Data.ByteString.Lazy.Char8 as B
 
 -- | Render some Blaze Html
---
-blaze :: Html -> ActionOM ()
+blaze :: (ScottyError e, Monad m) => Html -> ActionT e m ()
 blaze h = do
   setHeader "Content-Type" "text/html"
   raw $ Utf8.renderHtml h
 
-blazePretty :: Html -> ActionOM ()
+blazePretty :: (ScottyError e, Monad m) => Html -> ActionT e m ()
 blazePretty h = do
     setHeader "Content-Type" "text/html"
     raw $ B.pack $ Pretty.renderHtml h

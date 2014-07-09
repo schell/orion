@@ -28,6 +28,7 @@ prepareServiceLogin service key = do
     dest <- fmap ("/" ++) $ defaultParam "redirect" ""
     Just salt <- liftIO $ genSaltUsingPolicy fastBcryptHashingPolicy
     modifyAuthStates $ Map.insert salt $ LT.pack dest
+    -- TODO: Fork a process that deletes the auth state after some timeout.
     let query   = [("state", salt)]
     let authUrl  = authorizationUrl key `appendQueryParam` query
         authUrl' = authUrl `appendQueryParam` serviceQuery service
@@ -48,7 +49,7 @@ fetchRemoteUserData = do
     service <- param "service"
     code'   <- param "code"
     state   <- param "state"
-    let key = serviceKey service
+    let Just key = oauth2serviceKey service
         (url, body') = accessTokenUrl key code'
         query        = [("state", state)]
     mgr <- lift $ asks _oManager
@@ -88,7 +89,7 @@ parseToken service bs = do
                        Nothing -> object []
     case fromJSON jsn of
         Error err -> return $ Left $ LB.pack err
-        Success t -> do mgr <- lift $ asks _oManager 
+        Success t -> do mgr <- lift $ asks _oManager
                         liftIO $ getUserData mgr service t
 
 
