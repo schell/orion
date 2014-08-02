@@ -1,19 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Web.Session where
+module Web.Orion.Session where
 
-import           Web.Orion
-import           Web.Database.Types
-import           Web.Database.Operations
 import           Web.Scotty.Trans
 import           Web.ClientSession
-import           Web.Template
-import           Web.Template.Renderer
+import           Web.Orion
+import           Web.Orion.Database
+import           Web.Orion.OAuth.Services
+import           Web.Orion.Template
+import           Web.Orion.Template.Renderer
 import           Control.Monad.IO.Class (liftIO)
-import           Control.Monad
-import           Control.Applicative
 import           Network.HTTP.Types.Status
 import           Network.Wai
+import           Network.OAuth.OAuth2
 import           Data.Time.Clock
 import           Data.Aeson
 import           Data.Maybe
@@ -23,24 +22,14 @@ import qualified Data.Text                       as TS
 import qualified Data.ByteString.Char8           as B
 import qualified Data.ByteString.Lazy            as LB
 
-
-type CookieMap = M.Map TL.Text TL.Text
-
-
-data UserCookie = UserCookie Integer UTCTime deriving (Show)
-
-
-instance FromJSON UserCookie where
-    parseJSON (Object o) = UserCookie <$> o .: "id"
-                                      <*> o .: "expires"
-    parseJSON _ = mzero
-
-
-instance ToJSON UserCookie where
-    toJSON (UserCookie uid expires) = object [ "id" .= uid
-                                             , "expires" .= expires
-                                             ]
-
+withServiceToken :: AuthService -> (AccessToken -> ActionOM ()) -> ActionOM ()
+withServiceToken s f = withAuthUser $ \u -> do
+    let mT = do a <- findAccount s (_ouAccounts u)
+                _accToken a
+    case mT of
+        Nothing -> do url <- getServiceLoginRedirectURL s
+                      redirect url
+        Just t  -> f t
 
 withAuthUser :: (OrionUser -> ActionOM ()) -> ActionOM ()
 withAuthUser f = authorize $ do
@@ -49,17 +38,30 @@ withAuthUser f = authorize $ do
         Just u  -> f u
         Nothing -> blazeUnauthorized
 
+authorizeWithLevel :: Integer -> ActionOM () -> ActionOM ()
+authorizeWithLevel lvl f = withAuthUser $ \u -> do
+    if (_ouAcl u >= lvl) then f else blazeUnauthorized
 
 authorize :: ActionOM () -> ActionOM ()
 authorize f = do
-    pInfo <- fmap (TL.fromStrict . TS.intercalate "/" . pathInfo) request
-    f `ifAuthorizedOr` redirect ("/login?redirect=" `TL.append` pInfo)
+    redir <- getLoginRedirectURL
+    f `ifAuthorizedOr` redirect redir
 
+getServiceLoginRedirectURL :: AuthService -> ActionOM TL.Text
+getServiceLoginRedirectURL s = do
+    pInfo <- getCurrentURL
+    return $ foldl TL.append "/login/" [(TL.pack $ serviceToString s), "?redirect", pInfo]
+
+getLoginRedirectURL :: ActionOM TL.Text
+getLoginRedirectURL = do
+    pInfo <- getCurrentURL
+    return $ "/login?redirect=" `TL.append` pInfo
+
+getCurrentURL :: ActionOM TL.Text
+getCurrentURL = fmap (TL.fromStrict . TS.intercalate "/" . pathInfo) request
 
 blazeUnauthorized :: ActionOM ()
 blazeUnauthorized = (blaze $ wrapper "Unauthorized" $ errorStatus unauthorized401)
-
-
 
 ifAuthorizedOr :: ActionOM a -> ActionOM a -> ActionOM a
 ifAuthorizedOr f g = do
@@ -75,7 +77,6 @@ ifAuthorizedOr f g = do
         -- Update the cookie.
         else writeUserCookie c >> f
 
-
 renewUserCookie :: ActionOM ()
 renewUserCookie = do
     mUser <- readUserCookie
@@ -85,7 +86,6 @@ renewUserCookie = do
         let t' = addUTCTime seconds t
         writeUserCookie $ UserCookie uid t'
 
-
 expireUserCookie :: ActionOM ()
 expireUserCookie = do
     mUser <- readUserCookie
@@ -93,7 +93,6 @@ expireUserCookie = do
         t <- liftIO $ getCurrentTime
         let t' = addUTCTime (-60 * 10)  t
         writeUserCookie $ UserCookie uid t'
-
 
 writeUserCookie :: UserCookie -> ActionOM ()
 writeUserCookie u@(UserCookie _ e) = do
@@ -110,7 +109,6 @@ writeUserCookie u@(UserCookie _ e) = do
                                        , TL.pack $ show life
                                        , "; HttpOnly"
                                        ]
-
 
 readUserCookie :: ActionOM (Maybe UserCookie)
 readUserCookie = do
@@ -137,14 +135,12 @@ readUserCookie = do
     --            let datum = LB.fromStrict $ fromJust mData
     --            in return $ decode datum
 
-
 futureCookieForUser :: OrionUser -> ActionOM UserCookie
 futureCookieForUser u = do
     l <- readCfgCookieLife
     t <- liftIO $ getCurrentTime
     let t' = addUTCTime (fromIntegral l) t
     return $ UserCookie (_ouId u) t'
-
 
 readUser :: ActionOM (Maybe OrionUser)
 readUser = do
@@ -153,10 +149,8 @@ readUser = do
         Nothing -> return Nothing
         Just (UserCookie uid _) -> lookupUser uid
 
-
 cookieHasExpired :: UserCookie -> ActionOM Bool
 cookieHasExpired c = fmap (<= 0) $ cookieExpiresIn c
-
 
 cookieExpiresIn :: UserCookie -> ActionOM NominalDiffTime
 cookieExpiresIn (UserCookie _ e) = do
@@ -164,10 +158,8 @@ cookieExpiresIn (UserCookie _ e) = do
     let d = diffUTCTime e t
     return d
 
-
 cookieName :: TL.Text
 cookieName = "orioncookie"
-
 
 parseCookies :: TL.Text -> CookieMap
 parseCookies = foldl mapify M.empty . map tuple . splitCookies

@@ -1,16 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-module Web.Template where
+module Web.Orion.Template where
 
 import           Network.HTTP.Types.Status
 import           Data.Monoid
 import           Data.List ((\\))
 import           Text.Blaze.Html
 import           Text.Blaze.Html5
-import           Web.Database.Types
-import           Web.Auth.Service
 import           Web.Orion.User
+import           Web.Orion.Types
+import           Web.Orion.OAuth.Services
 import           Control.Monad
+import           Data.Maybe
 import qualified Data.ByteString.Char8 as B
 import qualified Text.Blaze.Html5 as H
 import qualified Text.Blaze.Html5.Attributes as A
@@ -29,19 +30,14 @@ headWithTitle t = H.head $ do
     --  Add custom CSS here
     H.style "body {margin-top: 60px;}"
 
-
-
 wrapper :: Html -> Html -> Html
 wrapper = wrapperWithNav loggedOutNav
-
 
 authdWrapper :: Html -> Html -> Html
 authdWrapper = loggedIn
 
-
 loggedIn :: Html -> Html -> Html
 loggedIn = wrapperWithNav loggedInNav
-
 
 wrapperWithNav :: Html -> Html -> Html -> Html
 wrapperWithNav navbar t content =
@@ -52,7 +48,6 @@ wrapperWithNav navbar t content =
             H.div ! A.class_ "container" $ H.div ! A.class_ "row" $ H.div ! A.class_ "col-lg-12" $ content
             script ! A.src "http://code.jquery.com/jquery-1.10.2.min.js" $ mempty
             script ! A.src "http://netdna.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js" $ mempty
-
 
 navFromPairs :: [(AttributeValue, Html)] -> [(AttributeValue, Html)] -> Html
 navFromPairs leftLinks rightLinks =
@@ -75,10 +70,8 @@ navFromPairs leftLinks rightLinks =
                 ul ! A.class_ "nav navbar-nav navbar-right" $
                     forM_ rightLinks $ \(href', html') -> li $ a ! A.href href' $ html'
 
-
 loggedOutNav :: Html
 loggedOutNav = navFromPairs [] [("/login", "Login")]
-
 
 loggedInNav :: Html
 loggedInNav = navFromPairs [("/user", "User")]  [("/logout", "Logout")]
@@ -90,25 +83,21 @@ loginOptions mParam = flip (maybe "/") mParam $ \redir -> H.div $ do
         li $ a ! A.href (toValue $ "/login/github?redirect=" ++ redir) $ "Github"
         li $ a ! A.href (toValue $ "/login/facebook?redirect=" ++ redir) $ "Facebook"
 
-
 errorMessage :: String -> Html
 errorMessage "stateMismatch" = do
     h3 "State mismatch"
     p "It looks like there was an error communicating with the login service. \
        \You should make sure you are on a secure network as a man in the middle \
        \attack may be occurring."
-
 errorMessage err = do
     h3 "Unknown error"
     p "An unknown error occured."
     pre $ toHtml err
 
-
 errorStatus :: Status -> Html
 errorStatus stat = do
     h3 $ toHtml $ show $ statusCode stat
     p $ toHtml $ B.unpack $ statusMessage stat
-
 
 userTable :: OrionUser -> Html
 userTable o@OrionUser{..} = do
@@ -127,17 +116,16 @@ userTable o@OrionUser{..} = do
             th $ "Login"
             th $ "Name"
             th $ "Email"
+            th $ "Has Token"
         tbody $ forM_ _ouAccounts $ \OrionAccount{..} -> tr $ do
             td $ toHtml $ show _accService
             td $ toHtml _accId
             td $ toHtml _accLogin
             td $ toHtml _accName
             td $ toHtml _accEmail
+            td $ toHtml $ isJust _accToken
     h4 "Link Another Account"
     let serviceLink s = a ! A.href (toValue $ serviceHref s) $ toHtml $ show s
         serviceHref s = concat ["/login/", s2s s, "?redirect=user"]
         s2s = serviceToString
     ul $ forM_ services $ li . serviceLink
-
-
-

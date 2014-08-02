@@ -47,6 +47,7 @@ cabal-version:       >=1.10
 
 
 executable sandbox
+  buildable:            False
   main-is:              Sandbox.hs
   hs-source-dirs:       src
   default-language:     Haskell2010
@@ -72,18 +73,25 @@ executable sandbox
                         text -any,
                         aeson -any,
                         attoparsec -any,
-                        configurator -any,
-                        ekg -any
+                        configurator -any
 
 
 
 
-executable orion
-  -- .hs or .lhs file containing the Main module.
-  main-is:              Main.hs
-
-  -- Modules included in this executable, other than Main.
-  -- other-modules:
+library
+  exposed-modules:      Web.Orion.OAuth
+                        Web.Orion.OAuth.Services
+                        Web.Orion.Types
+                        Web.Orion.Database
+                        Web.Orion.Config
+                        Web.Orion.User
+                        Web.Orion.Template.Renderer
+                        Web.Orion.Routes
+                        Web.Orion.Session
+                        Web.Orion.Template
+                        Web.Orion
+                        Web.Parsers
+                        Orion
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -112,7 +120,7 @@ executable orion
                         aeson -any,
                         attoparsec -any,
                         configurator -any,
-                        ekg -any
+                        convertible -any
 
   -- Directories containing source files.
   hs-source-dirs:       src

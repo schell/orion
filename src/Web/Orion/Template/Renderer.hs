@@ -1,10 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Web.Template.Renderer (
+module Web.Orion.Template.Renderer (
   blaze,
   blazePretty
 ) where
 
-import           Web.Orion.Types
 import           Web.Scotty.Trans
 import           Text.Blaze.Html (Html)
 import qualified Text.Blaze.Html.Renderer.Utf8 as Utf8

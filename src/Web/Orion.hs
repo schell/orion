@@ -11,7 +11,8 @@ module Web.Orion (
     readCfgCookieLife,
     readCfgUserDBFilePath,
     readCfgNewUserAclLevel,
-    withUserDB
+    withUserDB,
+    withDB
 ) where
 
 import           Web.Orion.Types as O
@@ -19,13 +20,14 @@ import           Web.Orion.Config as O
 import           Web.Scotty.Trans
 import           Network.HTTP.Conduit hiding (port)
 import           Data.Configurator.Types
-import           Data.Map
 import           Data.Pool
 import           Database.HDBC
 import           Database.HDBC.Sqlite3
+import           Control.Applicative
 import           Control.Monad.Reader
 import           Control.Concurrent.MVar
 import qualified Data.Text.Lazy as LT
+import qualified Data.Map as M
 
 
 optionalParam :: Parsable a => LT.Text -> ActionOM (Maybe a)
@@ -44,17 +46,19 @@ runOrion :: OrionApp -> (ReaderT OrionApp IO) a -> IO a
 runOrion = flip runReaderT
 
 
-orion :: OrionM () -> IO ()
-orion f = do
-    statesVar <- newMVar empty
-    cfg  <- getCfg
-    port <- getCfgPort cfg
-    dbFp <- getCfgUserDBFilePath cfg
-    mgr  <- newManager conduitManagerSettings
+orion :: KeyStore -> M.Map String (Pool Connection) -> OrionM () -> IO ()
+orion k odbs f = do
+    statesVar <- newMVar M.empty
+    cfg   <- getCfg
+    port  <- getCfgPort cfg
+    dbFp  <- getCfgUserDBFilePath cfg
+    mgr   <- newManager conduitManagerSettings
+    users <- createPool (connectSqlite3 dbFp) disconnect 1 60 10
 
-    pool <- createPool (connectSqlite3 dbFp) disconnect 1 60 10
-
-    let r = runOrion $ OrionApp cfg statesVar pool mgr
+    let dbs   = DatabaseCons { dbUsers = users
+                             , dbOther = odbs
+                             }
+        r = runOrion $ OrionApp cfg statesVar dbs mgr k
     scottyT port r r $ f
 
 
@@ -95,14 +99,24 @@ readCfgCookieLife = readCfg getCfgCookieLife
 readCfgUserDBFilePath :: MonadTrans (m LT.Text) => ScottyAction m FilePath
 readCfgUserDBFilePath = readCfg getCfgUserDBFilePath
 
-
 withUserDB :: (Monad (m LT.Text (ReaderT OrionApp IO)),
                MonadTrans (m LT.Text),
                MonadIO (m LT.Text (ReaderT OrionApp IO)))
            => (Connection -> IO a) -> ScottyAction m a
 withUserDB f = do
-    pool <- lift $ asks _oUserConnPool
+    pool <- lift $ asks (dbUsers . _oDBCons)
     liftIO $ withResource pool $ \conn -> withTransaction conn f
+
+withDB :: (Monad (m LT.Text (ReaderT OrionApp IO)),
+           MonadTrans (m LT.Text),
+           MonadIO (m LT.Text (ReaderT OrionApp IO)))
+           => String -> (Connection -> IO a) -> ScottyAction m (Maybe a)
+withDB s f = do
+    mPool <- lift $ M.lookup s <$> asks (dbOther . _oDBCons)
+    case mPool of
+        Nothing -> return Nothing
+        Just p  -> do a <- liftIO $ withResource p $ \conn -> withTransaction conn f
+                      return $ Just a
 
 
 readCfgNewUserAclLevel :: ActionOM Integer
